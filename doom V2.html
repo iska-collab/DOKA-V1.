@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zombie Survival - kagames</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            font-family: 'Arial', sans-serif;
+            color: white;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            box-shadow: inset 0 0 150px rgba(0,0,0,0.9);
+            pointer-events: none;
+            z-index: 4;
+        }
+
+        #hud {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            height: 90px;
+            background: linear-gradient(to top, #1a1a1a, #000);
+            border-top: 3px solid #333;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            z-index: 6;
+        }
+
+        .hud-panel {
+            text-align: center;
+        }
+
+        .hud-value {
+            font-size: 32px;
+            font-weight: bold;
+            display: block;
+            color: #d00;
+            text-shadow: 2px 2px #000;
+        }
+
+        .hud-label {
+            font-size: 11px;
+            color: #777;
+            letter-spacing: 2px;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+        }
+
+        .wave-text {
+            font-size: 80px;
+            color: #ff3300;
+            text-shadow: 4px 4px #000;
+            margin: 0;
+            display: none;
+            font-weight: bold;
+        }
+
+        #start-msg {
+            background: rgba(0,0,0,0.9);
+            padding: 30px;
+            border: 1px solid #444;
+            cursor: pointer;
+            pointer-events: auto;
+        }
+        
+        #damage-flash {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(150, 0, 0, 0.5);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 5;
+            transition: opacity 0.1s;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="640" height="400"></canvas>
+    <div id="vignette"></div>
+    <div id="damage-flash"></div>
+    
+    <div id="overlay">
+        <h1 id="wave-announce" class="wave-text">WAVE 1</h1>
+        <div id="start-msg">
+            <h1 style="color:#d00; margin-top:0;">SURVIVAL</h1>
+            <p>KLIK OM TE BEGINNEN</p>
+            <small style="color:#666;">WASD = LOPEN | MUIS = KIJKEN | KLIK = SCHIETEN</small>
+        </div>
+    </div>
+
+    <div id="hud">
+        <div class="hud-panel">
+            <span id="health-display" class="hud-value">100</span>
+            <span class="hud-label">GEZONDHEID</span>
+        </div>
+        <div class="hud-panel">
+            <span id="wave-display" class="hud-value" style="color:#ff0;">1</span>
+            <span class="hud-label">RONDE</span>
+        </div>
+        <div class="hud-panel">
+            <span id="ammo-display" class="hud-value" style="color:#0a0;">50</span>
+            <span class="hud-label">MUNITIE</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Audio Systeem (Synthesizer) ---
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+
+    const Sound = {
+        init() {
+            if (!audioCtx) audioCtx = new AudioCtx();
+        },
+        playShoot() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        },
+        playEmpty() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(100, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.05);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.05);
+        },
+        playHit() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(60, audioCtx.currentTime);
+            osc.frequency.linearRampToValueAtTime(20, audioCtx.currentTime + 0.2);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2);
+        },
+        playWave() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        }
+    };
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const healthDisplay = document.getElementById('health-display');
+    const ammoDisplay = document.getElementById('ammo-display');
+    const waveDisplay = document.getElementById('wave-display');
+    const waveAnnounce = document.getElementById('wave-announce');
+    const startMsg = document.getElementById('start-msg');
+    const damageFlash = document.getElementById('damage-flash');
+
+    const SCREEN_WIDTH = 640;
+    const SCREEN_HEIGHT = 400;
+    let ZBuffer = new Array(SCREEN_WIDTH).fill(0);
+
+    const worldMap = [
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,0,0,2,2,2,0,0,0,0,0,0,2,2,2,0,0,0,0,1],
+        [1,0,0,2,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,1],
+        [1,0,0,2,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,1],
+        [1,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,1],
+        [1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1],
+        [1,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0,0,0,1],
+        [1,0,0,3,3,0,0,0,0,0,0,0,0,3,3,0,0,0,0,1],
+        [1,0,0,3,3,0,0,0,0,0,0,0,0,3,3,0,0,0,0,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+        [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+    ];
+
+    let player = {
+        x: 10, y: 11,
+        dirX: 0, dirY: -1,
+        planeX: 0.66, planeY: 0,
+        health: 100,
+        ammo: 50,
+        moveSpeed: 0.15,
+        rotSpeed: 0.09
+    };
+
+    let currentWave = 1;
+    let sprites = [];
+    let waveInProgress = false;
+
+    const textures = [];
+    const spriteTextures = [];
+
+    function generateTextures() {
+        const size = 64;
+        const c1 = document.createElement('canvas');
+        c1.width = size; c1.height = size;
+        const ctx1 = c1.getContext('2d');
+        ctx1.fillStyle = '#444';
+        ctx1.fillRect(0,0,size,size);
+        for(let i=0; i<100; i++){
+            ctx1.fillStyle = `rgba(0,0,0,${Math.random()*0.3})`;
+            ctx1.fillRect(Math.random()*size, Math.random()*size, 4, 2);
+        }
+        ctx1.strokeStyle = '#222';
+        ctx1.strokeRect(0,0,size,size);
+        textures[1] = c1;
+
+        const c2 = document.createElement('canvas');
+        c2.width = size; c2.height = size;
+        const ctx2 = c2.getContext('2d');
+        ctx2.fillStyle = '#666';
+        ctx2.fillRect(0,0,size,size);
+        ctx2.fillStyle = '#432';
+        for(let i=0; i<20; i++) ctx2.fillRect(Math.random()*size, Math.random()*size, 10, 10);
+        ctx2.strokeStyle = '#333';
+        ctx2.strokeRect(0,0,size,size);
+        textures[2] = c2;
+
+        const c3 = document.createElement('canvas');
+        c3.width = size; c3.height = size;
+        const ctx3 = c3.getContext('2d');
+        ctx3.fillStyle = '#223';
+        ctx3.fillRect(0,0,size,size);
+        ctx3.strokeStyle = '#445';
+        ctx3.strokeRect(5,5,54,54);
+        textures[3] = c3;
+
+        const z = document.createElement('canvas');
+        z.width = size; z.height = size;
+        const zx = z.getContext('2d');
+        zx.fillStyle = '#252'; zx.fillRect(20,10,24,40);
+        zx.fillStyle = '#131'; zx.fillRect(18,15,28,15);
+        zx.fillStyle = '#f00'; zx.fillRect(26,18,3,3); zx.fillRect(35,18,3,3);
+        spriteTextures[0] = z;
+
+        const d = document.createElement('canvas');
+        d.width = size; d.height = size;
+        const dx = d.getContext('2d');
+        dx.fillStyle = '#121'; dx.beginPath(); dx.arc(32,55,25,0,7); dx.fill();
+        dx.fillStyle = '#400'; dx.fillRect(20,52,24,4);
+        spriteTextures[1] = d;
+    }
+    generateTextures();
+
+    function startNewWave() {
+        Sound.playWave();
+        waveInProgress = true;
+        waveAnnounce.style.display = "block";
+        waveAnnounce.textContent = "WAVE " + currentWave;
+        waveDisplay.textContent = currentWave;
+        player.ammo = Math.min(player.ammo + 25, 100);
+        ammoDisplay.textContent = player.ammo;
+
+        sprites = [];
+        const count = 3 + (currentWave * 2);
+        for(let i=0; i<count; i++) {
+            let rx, ry;
+            do {
+                rx = Math.random()*18+1; ry = Math.random()*12+1;
+            } while(worldMap[Math.floor(ry)][Math.floor(rx)] !== 0 || Math.abs(rx-player.x) < 4);
+            sprites.push({ x: rx, y: ry, hp: 2, state: 'alive' });
+        }
+        setTimeout(() => { waveAnnounce.style.display = "none"; }, 2000);
+    }
+
+    const keys = { w: false, a: false, s: false, d: false };
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+    let isShooting = false;
+    let shootAnim = 0;
+
+    canvas.addEventListener('click', () => {
+        Sound.init(); // Start audio context na eerste klik
+        if(document.pointerLockElement !== canvas) {
+            canvas.requestPointerLock();
+            startMsg.style.display = 'none';
+            if(!waveInProgress) startNewWave();
+        } else {
+            fire();
+        }
+    });
+
+    document.addEventListener('mousemove', e => {
+        if(document.pointerLockElement === canvas) {
+            // FIX: Muis naar links is nu naar links kijken (omgedraaid ten opzichte van vorige versie)
+            const rot = e.movementX * 0.003; 
+            const oldDirX = player.dirX;
+            player.dirX = player.dirX * Math.cos(rot) - player.dirY * Math.sin(rot);
+            player.dirY = oldDirX * Math.sin(rot) + player.dirY * Math.cos(rot);
+            const oldPlaneX = player.planeX;
+            player.planeX = player.planeX * Math.cos(rot) - player.planeY * Math.sin(rot);
+            player.planeY = oldPlaneX * Math.sin(rot) + player.planeY * Math.cos(rot);
+        }
+    });
+
+    function fire() {
+        if(isShooting) return;
+        if(player.ammo <= 0) {
+            Sound.playEmpty();
+            return;
+        }
+        
+        Sound.playShoot();
+        isShooting = true;
+        shootAnim = 10;
+        player.ammo--;
+        ammoDisplay.textContent = player.ammo;
+
+        sprites.forEach(s => {
+            if(s.state !== 'alive') return;
+            const dx = s.x - player.x, dy = s.y - player.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const angle = Math.atan2(dy, dx);
+            const pAngle = Math.atan2(player.dirY, player.dirX);
+            let diff = angle - pAngle;
+            while(diff < -Math.PI) diff += Math.PI*2;
+            while(diff > Math.PI) diff -= Math.PI*2;
+            if(Math.abs(diff) < 0.15 && dist < 10) {
+                s.hp--;
+                if(s.hp <= 0) s.state = 'dead';
+            }
+        });
+    }
+
+    function update() {
+        if(!waveInProgress && sprites.length === 0) return;
+
+        let mx = 0, my = 0;
+        if(keys.w) { mx += player.dirX * player.moveSpeed; my += player.dirY * player.moveSpeed; }
+        if(keys.s) { mx -= player.dirX * player.moveSpeed; my -= player.dirY * player.moveSpeed; }
+        if(keys.a) { mx -= player.planeX * player.moveSpeed; my -= player.planeY * player.moveSpeed; }
+        if(keys.d) { mx += player.planeX * player.moveSpeed; my += player.planeY * player.moveSpeed; }
+
+        if(worldMap[Math.floor(player.y)][Math.floor(player.x + mx)] === 0) player.x += mx;
+        if(worldMap[Math.floor(player.y + my)][Math.floor(player.x)] === 0) player.y += my;
+
+        if(shootAnim > 0) shootAnim--; else isShooting = false;
+
+        let alive = 0;
+        sprites.forEach(s => {
+            if(s.state === 'dead') return;
+            alive++;
+            const dx = player.x - s.x, dy = player.y - s.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if(dist > 0.6) {
+                const spd = 0.03 + (currentWave * 0.005);
+                s.x += (dx/dist)*spd; s.y += (dy/dist)*spd;
+            } else {
+                player.health -= 0.4;
+                healthDisplay.textContent = Math.max(0, Math.floor(player.health));
+                damageFlash.style.opacity = 0.5;
+                if(Math.random() < 0.1) Sound.playHit();
+                setTimeout(()=> damageFlash.style.opacity = 0, 50);
+                if(player.health <= 0) location.reload();
+            }
+        });
+
+        if(alive === 0 && waveInProgress) {
+            waveInProgress = false;
+            currentWave++;
+            setTimeout(startNewWave, 3000);
+        }
+    }
+
+    function draw() {
+        ctx.fillStyle = '#050505'; ctx.fillRect(0,0,SCREEN_WIDTH, SCREEN_HEIGHT/2);
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0,SCREEN_HEIGHT/2, SCREEN_WIDTH, SCREEN_HEIGHT/2);
+
+        for(let x=0; x<SCREEN_WIDTH; x++) {
+            let camX = 2 * x / SCREEN_WIDTH - 1;
+            let rdX = player.dirX + player.planeX * camX;
+            let rdY = player.dirY + player.planeY * camX;
+            let mX = Math.floor(player.x), mY = Math.floor(player.y);
+            let dX = Math.abs(1/rdX), dY = Math.abs(1/rdY);
+            let sX, sY, sdX, sdY, side, dist;
+
+            if(rdX < 0) { sX = -1; sdX = (player.x - mX)*dX; } else { sX = 1; sdX = (mX+1-player.x)*dX; }
+            if(rdY < 0) { sY = -1; sdY = (player.y - mY)*dY; } else { sY = 1; sdY = (mY+1-player.y)*dY; }
+
+            while(true) {
+                if(sdX < sdY) { sdX += dX; mX += sX; side = 0; } else { sdY += dY; mY += sY; side = 1; }
+                if(worldMap[mY][mX] > 0) break;
+            }
+            dist = (side === 0) ? (sdX - dX) : (sdY - dY);
+            ZBuffer[x] = dist;
+
+            let h = Math.floor(SCREEN_HEIGHT / dist);
+            let start = -h/2 + SCREEN_HEIGHT/2;
+            let tex = textures[worldMap[mY][mX]];
+            let bright = Math.min(1.2, 5 / dist);
+            if(side === 1) bright *= 0.7;
+            ctx.filter = `brightness(${bright})`;
+            ctx.drawImage(tex, x, start, 1, h);
+        }
+        ctx.filter = 'none';
+
+        sprites.forEach(s => s.d = Math.pow(player.x-s.x,2)+Math.pow(player.y-s.y,2));
+        sprites.sort((a,b)=> b.d - a.d).forEach(s => {
+            let sx = s.x-player.x, sy = s.y-player.y;
+            let det = 1/(player.planeX*player.dirY - player.dirX*player.planeY);
+            let tx = det*(player.dirY*sx - player.dirX*sy), ty = det*(-player.planeY*sx + player.planeX*sy);
+            if(ty <= 0) return;
+            let scX = Math.floor((SCREEN_WIDTH/2)*(1+tx/ty));
+            let sz = Math.abs(Math.floor(SCREEN_HEIGHT/ty));
+            if(scX+sz/2 < 0 || scX-sz/2 > SCREEN_WIDTH || ty > ZBuffer[scX]) return;
+            ctx.drawImage(s.state==='alive'?spriteTextures[0]:spriteTextures[1], scX-sz/2, SCREEN_HEIGHT/2-sz/2, sz, sz);
+        });
+
+        drawGun();
+    }
+
+    function drawGun() {
+        const x = SCREEN_WIDTH / 2;
+        const y = SCREEN_HEIGHT;
+        const recoil = shootAnim > 5 ? 25 : 0;
+
+        if(shootAnim > 7) {
+            ctx.fillStyle = 'rgba(255,255,200,0.8)';
+            ctx.beginPath(); ctx.arc(x, y-180, 50, 0, 7); ctx.fill();
+        }
+
+        ctx.fillStyle = '#111';
+        ctx.fillRect(x + 20, y - 100 + recoil, 50, 100);
+        ctx.fillStyle = '#222';
+        ctx.fillRect(x - 25, y - 140 + recoil, 50, 150);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(x - 15, y - 180 + recoil, 30, 60);
+        ctx.fillStyle = '#333';
+        ctx.fillRect(x - 10, y - 145 + recoil, 20, 5);
+        ctx.strokeStyle = '#f00';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x-5, SCREEN_HEIGHT/2-5, 10, 10);
+    }
+
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+    loop();
+</script>
+</body>
+</html>
